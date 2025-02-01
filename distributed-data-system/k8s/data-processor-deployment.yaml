@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: data-processor
+spec:
+  replicas: 3  # Adjust based on load
+  selector:
+    matchLabels:
+      app: data-processor
+  template:
+    metadata:
+      labels:
+        app: data-processor
+    spec:
+      containers:
+      - name: data-processor
+        image: data-processor:latest  # TODO: Replace with your image
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        env:
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          valueFrom:
+            configMapKeyRef:
+              name: kafka-config
+              key: bootstrap.servers
+        - name: MONGODB_URI
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-credentials
+              key: uri
+        - name: S3_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: s3-credentials
+              key: access-key
+        - name: S3_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: s3-credentials
+              key: secret-key
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/config
+      volumes:
+      - name: config-volume
+        configMap:
+          name: processor-config

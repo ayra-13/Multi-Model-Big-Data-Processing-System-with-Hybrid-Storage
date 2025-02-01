@@ -1,0 +1,57 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+# Alertmanager configuration (if needed in the future)
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          # - alertmanager:9093
+
+# Load rules once and periodically evaluate them
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # - job_name: 'kafka'
+  #   static_configs:
+  #     - targets: ['kafka:29092']
+  #   metrics_path: '/metrics'
+  #   scrape_interval: 10s
+
+  # - job_name: 'data-processor'
+  #   static_configs:
+  #     - targets: ['data-processor:8000']
+  #   metrics_path: '/metrics'
+  #   scrape_interval: 10s
+
+  - job_name: 'data-generator'
+    static_configs:
+      - targets: ['data-generator:8001']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # - job_name: 'mongodb'
+  #   static_configs:
+  #     - targets: ['mongodb:27017']
+  #   metrics_path: '/metrics'
+  #   scrape_interval: 30s
+
+  # - job_name: 'elasticsearch'
+  #   static_configs:
+  #     - targets: ['elasticsearch:9200']
+  #   metrics_path: '/_prometheus/metrics'
+  #   scrape_interval: 30s
+
+  # - job_name: 'cassandra'
+  #   static_configs:
+  #     - targets: ['cassandra-jmx-exporter:7070']
+  #   metrics_path: '/metrics'
+  #   scrape_interval: 30s

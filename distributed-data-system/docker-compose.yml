@@ -1,0 +1,350 @@
+# docker-compose.yml
+
+services:
+  # Kafka and Zookeeper
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_INIT_LIMIT: 5
+      ZOOKEEPER_SYNC_LIMIT: 2
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+    networks:
+      - kafka-net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    restart: unless-stopped
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:29092 --list || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,INTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_RETENTION_HOURS: 1
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
+      KAFKA_ZOOKEEPER_CONNECTION_TIMEOUT_MS: 6000
+      KAFKA_MESSAGE_MAX_BYTES: 10485760  # Reduced to 5MB to match client settings
+      KAFKA_REPLICA_FETCH_MAX_BYTES: 10485760  # Reduced to 5MB
+      KAFKA_MAX_REQUEST_SIZE: 10485760  # Reduced to 5MB
+      KAFKA_SOCKET_REQUEST_MAX_BYTES: 10485760 # Added socket request limit
+      KAFKA_SOCKET_RECEIVE_BUFFER_BYTES: 10485760  # Added socket buffer size
+      KAFKA_SOCKET_SEND_BUFFER_BYTES: 10485760  # Added socket buffer size
+      KAFKA_DELETE_TOPIC_ENABLE: "true"  # Enable topic deletion
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"  # Disable auto topic creation
+      KAFKA_HEAP_OPTS: "-Xmx1G -Xms512m"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks:
+      - kafka-net
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+    restart: unless-stopped
+
+  # MongoDB
+  mongodb:
+    image: mongo:6.0
+    container_name: mongodb
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      retries: 3
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: example
+    volumes:
+      - mongodb-data:/data/db
+    networks:
+      - kafka-net
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+    restart: unless-stopped
+
+  # Elasticsearch
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.13
+    container_name: elasticsearch
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:9200/_cluster/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    environment:
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - xpack.security.enabled=false
+      - "cluster.name=docker-cluster"
+      - "bootstrap.memory_lock=true"
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - kafka-net
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    restart: unless-stopped
+
+  # Cassandra
+  cassandra:
+    image: cassandra:4.1
+    container_name: cassandra
+    healthcheck:
+      test: ["CMD-SHELL", "nodetool status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    environment:
+      - CASSANDRA_CLUSTER_NAME=data_cluster
+      - CASSANDRA_ENDPOINT_SNITCH=SimpleSnitch
+      - HEAP_NEWSIZE=128M
+      - MAX_HEAP_SIZE=512M
+      - CASSANDRA_START_RPC=true
+      - JAVA_OPTS=-javaagent:/jmx-exporter/jmx_prometheus_javaagent.jar=7070:/jmx-exporter/config.yaml
+    ports:
+      - "9042:9042"
+      - "7070:7070"  # JMX port for metrics
+    volumes:
+      - ./jmx-exporter:/jmx-exporter
+      - cassandra-data:/var/lib/cassandra
+    networks:
+      - kafka-net
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+    restart: unless-stopped
+
+
+  # MinIO (S3-compatible storage)
+  minio:
+    image: minio/minio
+    container_name: minio
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio-data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      - kafka-net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    restart: unless-stopped
+
+  # Grafana
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: grafana
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks:
+      - kafka-net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    restart: unless-stopped
+
+  # Prometheus for metrics
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    container_name: prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    networks:
+      - kafka-net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    restart: unless-stopped
+
+  # Data Generator Service
+  data-generator:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.generator
+    container_name: data-generator
+    depends_on:
+      kafka:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - MONGODB_URI=mongodb://root:example@mongodb:27017/
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - CASSANDRA_HOSTS=cassandra
+      - S3_ACCESS_KEY=minioadmin
+      - S3_SECRET_KEY=minioadmin
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_BUCKET=data-storage
+    ports:
+      - "8001:8001"
+    networks:
+      - kafka-net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    restart: unless-stopped
+
+  # Data Processor Service
+  data-processor:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: data-processor
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - MONGODB_URI=mongodb://root:example@mongodb:27017/
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - CASSANDRA_HOSTS=cassandra
+      - S3_ACCESS_KEY=minioadmin
+      - S3_SECRET_KEY=minioadmin
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_BUCKET=data-storage
+    ports:
+      - "8000:8000"
+    networks:
+      - kafka-net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    restart: unless-stopped
+
+  cassandra-jmx-exporter:
+    image: bitnami/jmx-exporter:0.18.0-debian-11-r19
+    container_name: cassandra-jmx-exporter
+    ports:
+      - "7071:7070"  # Expose metrics on port 7070
+    environment:
+      - JAVA_OPTS=-javaagent:/opt/bitnami/jmx-exporter/jmx_prometheus_javaagent.jar=7070:/config.yaml
+    volumes:
+      - ./docker/jmx_config.yaml:/config.yaml
+    depends_on:
+      - cassandra
+    networks:
+      - kafka-net
+    restart: unless-stopped
+
+
+networks:
+  kafka-net:
+    driver: bridge
+
+volumes:
+  zookeeper-data:
+  kafka-data:
+  mongodb-data:
+  elasticsearch-data:
+  cassandra-data:
+  minio-data:
+  grafana-data:
+  prometheus-data:
